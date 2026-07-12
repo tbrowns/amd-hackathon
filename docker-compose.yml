@@ -1,0 +1,93 @@
+name: shambalens
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["local"]
+    environment:
+      POSTGRES_DB: shambalens
+      POSTGRES_USER: shambalens
+      POSTGRES_PASSWORD: local-development-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shambalens -d shambalens"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    init: true
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://shambalens:local-development-only@postgres:5432/shambalens}
+      DATABASE_URL_UNPOOLED: ${DATABASE_URL_UNPOOLED:-postgresql://shambalens:local-development-only@postgres:5432/shambalens}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      GROQ_VISION_MODEL: ${GROQ_VISION_MODEL:-qwen/qwen3.6-27b}
+      GROQ_REASONING_MODEL: ${GROQ_REASONING_MODEL:-openai/gpt-oss-120b}
+      GROQ_VERIFIER_MODEL: ${GROQ_VERIFIER_MODEL:-openai/gpt-oss-120b}
+      AI_PROVIDER: ${AI_PROVIDER:-groq}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-8}
+      MAX_IMAGE_PIXELS: ${MAX_IMAGE_PIXELS:-33000000}
+      MODEL_TIMEOUT_SECONDS: ${MODEL_TIMEOUT_SECONDS:-45}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      UPLOAD_DIR: /app/data/uploads
+      ANONYMOUS_TOKEN_SALT: ${ANONYMOUS_TOKEN_SALT:-local-development-salt-change-before-deployment}
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    init: true
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  uploads:

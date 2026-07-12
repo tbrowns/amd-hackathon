@@ -1,0 +1,165 @@
+import type { Assessment, AssessmentSummary, DashboardSummary, FinalAssessment, ImageQuality, InitialAssessment } from "@/lib/types";
+
+export const quality: ImageQuality = {
+  status: "good",
+  plant_visible: true,
+  crop_relevant: true,
+  affected_area_visible: true,
+  clarity_score: 0.92,
+  lighting_acceptable: true,
+  observations: ["Lower leaves are in focus"],
+  retake_instructions: [],
+};
+
+export const initialAssessment: InitialAssessment = {
+  observation_summary: "Brown circular spots are visible on several lower tomato leaves.",
+  hypotheses: [
+    {
+      name: "Early blight",
+      category: "fungal_disease",
+      confidence: 0.66,
+      supporting_evidence: ["Brown spots occur on lower leaves"],
+      contradicting_evidence: ["Concentric rings are not clearly visible"],
+      missing_information: ["Whether spots have target-like rings"],
+      severity: "moderate",
+    },
+    {
+      name: "Bacterial spot",
+      category: "bacterial_disease",
+      confidence: 0.31,
+      supporting_evidence: ["Leaf spotting is present"],
+      contradicting_evidence: ["No water-soaked margins are visible"],
+      missing_information: ["Recent splash dispersal"],
+      severity: "unknown",
+    },
+  ],
+  follow_up_questions: [
+    {
+      id: "target_rings",
+      text: "Do the spots have target-like rings?",
+      input_type: "yes_no",
+      options: [],
+      explanation: "Rings help distinguish the leading possibilities.",
+      distinguishes: ["Early blight", "Bacterial spot"],
+    },
+    {
+      id: "distribution",
+      text: "Where did the spots begin?",
+      input_type: "multiple_choice",
+      options: ["Mostly lower leaves", "Mostly upper leaves"],
+      explanation: "Distribution is useful evidence.",
+      distinguishes: ["Early blight", "Environmental stress"],
+    },
+    {
+      id: "plant_count",
+      text: "How many plants are affected?",
+      input_type: "short_text",
+      options: [],
+      explanation: "Spread changes urgency.",
+      distinguishes: ["Isolated damage", "Spreading disease"],
+    },
+  ],
+  overall_confidence: 0.58,
+  urgency: "moderate",
+  uncertainty_message: "A photo cannot confirm the cause without laboratory testing.",
+  requires_expert: false,
+  image_quality: quality,
+  sources: ["CABI Crop Protection Compendium — tomato early blight"],
+  simulated: true,
+};
+
+export const finalAssessment: FinalAssessment = {
+  observation_summary: initialAssessment.observation_summary,
+  hypotheses: initialAssessment.hypotheses,
+  most_likely_explanation: "Early blight is the leading explanation",
+  overall_confidence: 0.71,
+  urgency: "moderate",
+  uncertainty_message: "The pattern is compatible with early blight but is not laboratory confirmation.",
+  what_changed: "The lower-leaf distribution strengthened the leading explanation.",
+  greatest_effect: "The farmer reported that symptoms began on lower leaves.",
+  action_plan: {
+    do_today: ["Remove heavily affected leaves using clean tools."],
+    monitor: ["Check new growth every two days."],
+    avoid: ["Do not apply an unlabelled pesticide."],
+    escalate_when: ["Seek local help if spots spread rapidly."],
+  },
+  warning_signs: ["Rapid spread across new growth"],
+  expert_guidance: "Ask a local extension officer before choosing any chemical control.",
+  requires_expert: false,
+  sources: ["CABI Crop Protection Compendium — tomato early blight"],
+  limitations_notice: "This triage report is advisory and cannot confirm a pathogen.",
+  simulated: true,
+};
+
+export const assessment: Assessment = {
+  id: "assessment-12345678",
+  status: "completed",
+  crop: "tomato",
+  growth_stage: "fruiting",
+  region: "Kiambu",
+  symptom_duration: "4-7 days",
+  watering_conditions: "Frequent rain; leaves have stayed wet",
+  description: "Spots began after several wet days.",
+  language: "en",
+  images: [],
+  image_quality: quality,
+  model_observation: {
+    image_quality: quality,
+    crop_guess: "tomato",
+    observation_summary: initialAssessment.observation_summary,
+    visible_symptoms: ["Brown circular leaf spots"],
+    distribution: ["Lower leaves"],
+  },
+  initial_assessment: initialAssessment,
+  answers: [
+    { question_id: "target_rings", answer: true },
+    { question_id: "distribution", answer: "Mostly lower leaves" },
+    { question_id: "plant_count", answer: "Three plants" },
+  ],
+  final_assessment: finalAssessment,
+  verification: {
+    passed: true,
+    issues: [],
+    corrected_assessment: null,
+    confidence_adjustment: 0,
+    chemical_advice_removed: false,
+  },
+  provider_metadata: {
+    provider: "demo",
+    vision_model: "deterministic-fixture",
+    reasoning_model: "deterministic-fixture",
+    verifier_model: "deterministic-fixture",
+    reasoner_received_images: false,
+    simulated: true,
+  },
+  timing_metadata: { local_image_checks_ms: 3, vision_ms: 12, reasoning_ms: 18, revision_ms: 9, verification_ms: 7 },
+  created_at: "2026-07-11T08:00:00Z",
+  updated_at: "2026-07-11T08:04:00Z",
+  completed_at: "2026-07-11T08:04:00Z",
+  simulated: true,
+};
+
+export const assessmentSummary: AssessmentSummary = {
+  id: assessment.id,
+  status: "completed",
+  crop: "tomato",
+  region: "Kiambu",
+  urgency: "moderate",
+  leading_hypothesis: "Early blight",
+  created_at: assessment.created_at,
+  completed_at: assessment.completed_at,
+  simulated: true,
+};
+
+export const dashboardSummary: DashboardSummary = {
+  reports_this_week: 5,
+  most_affected_crop: "tomato",
+  most_common_category: "fungal_disease",
+  reports_by_region: [
+    { region: "Kiambu", reports: 3 },
+    { region: "Nakuru", reports: 2 },
+  ],
+  high_urgency_signals: 2,
+  disclaimer: "Community-reported AI signals, not confirmed outbreak data.",
+  simulated: true,
+};

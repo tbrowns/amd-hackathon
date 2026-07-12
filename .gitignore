@@ -1,0 +1,63 @@
+# Secrets and local environment overrides
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Node and Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data and generated reports
+backend/data/
+data/
+uploads/
+benchmark-results*.json
+benchmark-results*.md
+playwright-report/
+test-results/
+
+# Codex workspace scratch/deliverables
+/outputs/
+/work/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local databases and logs
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
