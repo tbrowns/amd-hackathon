@@ -35,7 +35,12 @@ async def test_health_and_runtime(client: httpx.AsyncClient) -> None:
     assert health.json() == {"status": "ok"}
     assert runtime.status_code == 200
     assert runtime.json()["execution_mode"] == "demo"
-    assert runtime.json()["database"] == "sqlite"
+    expected_database = (
+        "postgresql"
+        if get_settings().async_database_url.startswith("postgresql")
+        else "sqlite"
+    )
+    assert runtime.json()["database"] == expected_database
     assert "amd" not in runtime.text.lower()
 
 
