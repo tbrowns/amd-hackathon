@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import require_token
+from app.api.dependencies import require_firebase_user, require_token
 from app.core.config import Settings, get_settings
 from app.core.errors import AppError
 from app.db.models import Assessment
@@ -21,8 +22,15 @@ from app.schemas.assessments import (
     DashboardSummary,
     Language,
     RuntimeInfo,
+    StoredAssessmentCreate,
 )
-from app.services.images import store_images
+from app.services.images import (
+    delete_firebase_uploads,
+    delete_stored_images,
+    image_bytes,
+    store_firebase_images,
+    store_images,
+)
 from app.services.pipeline import (
     LAST_STAGE_LATENCIES_MS,
     analyze_assessment,
@@ -69,6 +77,7 @@ async def runtime(settings: Annotated[Settings, Depends(get_settings)]) -> Runti
         else settings.groq_verifier_model,
         last_stage_latencies_ms=dict(LAST_STAGE_LATENCIES_MS),
         database=database,
+        image_storage=settings.image_storage,
     )
 
 
@@ -122,9 +131,55 @@ async def create_assessment(
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()
-        for image in stored:
-            (settings.upload_dir.resolve() / image["filename"]).unlink(missing_ok=True)
+        await delete_stored_images(stored, settings)
         raise
+    await db.refresh(assessment)
+    return to_detail(assessment)
+
+
+@router.post(
+    "/api/v1/assessments/from-storage",
+    response_model=AssessmentDetail,
+    status_code=201,
+    tags=["assessments"],
+)
+async def create_assessment_from_storage(
+    submission: StoredAssessmentCreate,
+    token: Annotated[str, Depends(require_token)],
+    firebase_uid: Annotated[str, Depends(require_firebase_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> AssessmentDetail:
+    assessment_id = str(uuid4())
+    selected_scenario = default_demo_scenario(
+        submission.crop.value, settings, submission.demo_scenario
+    )
+    stored = await store_firebase_images(
+        submission.images, firebase_uid, assessment_id, settings
+    )
+    assessment = Assessment(
+        id=assessment_id,
+        token_hash=token_hash(token, settings),
+        crop=submission.crop.value,
+        growth_stage=submission.growth_stage,
+        region=submission.region or None,
+        symptom_duration=submission.symptom_duration,
+        watering_conditions=submission.watering_conditions,
+        description=submission.description or None,
+        language=submission.language.value,
+        demo_scenario=selected_scenario,
+        images=stored,
+        provider_metadata={"image_storage": "firebase"},
+        timing_metadata={},
+    )
+    db.add(assessment)
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        await delete_stored_images(stored, settings)
+        raise
+    await delete_firebase_uploads(submission.images, firebase_uid, settings)
     await db.refresh(assessment)
     return to_detail(assessment)
 
@@ -195,17 +250,15 @@ async def get_assessment_image(
     token: Annotated[str, Depends(require_token)],
     db: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
-) -> FileResponse:
+) -> Response:
     assessment = await owned_assessment(db, assessment_id, token_hash(token, settings))
     image = next((item for item in assessment.images if item.get("id") == image_id), None)
     if image is None:
         raise AppError("not_found", "Image not found.", 404)
-    upload_root = settings.upload_dir.resolve()
-    path = (upload_root / str(image["filename"])).resolve()
-    if path.parent != upload_root or not path.is_file():
-        raise AppError("not_found", "Image not found.", 404)
-    return FileResponse(
-        path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"}
+    return Response(
+        content=await image_bytes(image, settings),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 

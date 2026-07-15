@@ -62,7 +62,10 @@ async def test_analysis_timeout_restores_retryable_state(
     provider = FailingProvider(ModelTimeoutError())
     monkeypatch.setattr(pipeline, "provider_for", lambda *_: provider)
     monkeypatch.setattr(pipeline, "local_quality", lambda *_: good_quality())
-    monkeypatch.setattr(pipeline, "image_data_urls", lambda *_: ["data:image/jpeg;base64,eA=="])
+    async def fake_image_data_urls(*_: object) -> list[str]:
+        return ["data:image/jpeg;base64,eA=="]
+
+    monkeypatch.setattr(pipeline, "image_data_urls", fake_image_data_urls)
     async with SessionLocal() as db:
         db.add(item)
         await db.commit()

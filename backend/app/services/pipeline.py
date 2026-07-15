@@ -81,7 +81,7 @@ async def analyze_assessment(
         provider = provider_for(assessment, settings)
         started = time.perf_counter()
         observation = await provider.observe_images(
-            image_data_urls=image_data_urls(assessment.images, settings),
+            image_data_urls=await image_data_urls(assessment.images, settings),
             crop=assessment.crop,
             language=assessment.language,
         )

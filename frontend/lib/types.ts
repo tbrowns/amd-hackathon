@@ -177,6 +177,7 @@ export interface RuntimeInfo {
   verifier_model: string;
   last_stage_latencies_ms: TimingMetadata;
   database: "postgresql" | "sqlite" | "other";
+  image_storage: "local" | "firebase";
 }
 
 export interface DashboardRegion {

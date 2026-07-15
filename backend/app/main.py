@@ -83,7 +83,7 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Shamba-Token", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Shamba-Token", "X-Request-ID"],
 )
 
 

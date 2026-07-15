@@ -184,14 +184,17 @@ export function AssessmentWizard({ assessmentId }: { assessmentId?: string }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
     try {
       const images = files.length > 0 ? files : scenario ? [await createDemoImage(scenario)] : [];
-      const created = await createAssessment({
-        ...values,
-        language: values.language as Language,
-        images,
-        demo_scenario: scenario?.id,
-        region: values.region || undefined,
-        description: values.description || undefined,
-      });
+      const created = await createAssessment(
+        {
+          ...values,
+          language: values.language as Language,
+          images,
+          demo_scenario: scenario?.id,
+          region: values.region || undefined,
+          description: values.description || undefined,
+        },
+        runtime?.image_storage ?? "local",
+      );
       setAssessment(created);
       try {
         handleAnalyzed(await analyzeAssessment(created.id));

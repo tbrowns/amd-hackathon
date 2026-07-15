@@ -16,7 +16,9 @@ flowchart TB
     subgraph Client["Farmer device"]
         Browser["Next.js application"]
         Token["Opaque ownership token"]
+        FirebaseAuth["Firebase anonymous identity"]
         Browser --- Token
+        Browser --- FirebaseAuth
     end
 
     subgraph Service["Application service"]
@@ -33,7 +35,7 @@ flowchart TB
 
     subgraph Data["Private data plane"]
         Neon[("Neon PostgreSQL")]
-        Uploads[("Sanitized image volume")]
+        Uploads[("Private Firebase Storage")]
     end
 
     subgraph Inference["Groq inference"]
@@ -41,29 +43,30 @@ flowchart TB
         GPT["GPT-OSS text reasoning"]
     end
 
-    Browser -->|"HTTPS API"| API
+    Browser -->|"Direct authenticated upload"| Uploads
+    Browser -->|"HTTPS API + object path"| API
     API --> Neon
     API --> Uploads
     Provider --> Qwen
     Provider --> GPT
 ```
 
-Only the backend can reach the database, private upload volume, and Groq API. The frontend receives no service credentials. `NEXT_PUBLIC_API_BASE_URL` is the sole browser-visible service configuration value.
+Only the backend can read sanitized assessment objects, reach Neon, and call Groq. The browser may create or delete temporary objects only beneath its Firebase UID-scoped upload path. Firebase web identifiers are public application configuration; Firebase Admin credentials and model/database secrets remain backend-only.
 
 ## Components
 
 | Component | Responsibility | Trust notes |
 | --- | --- | --- |
-| Next.js frontend | Upload, context wizard, questions, reports, previous reports, dashboard, English/Swahili UI, print and copy actions | Treats all server data as untrusted display input; holds an opaque token, never service keys |
-| FastAPI routes | Versioned transport, multipart parsing, ownership checks, safe errors, request IDs, CORS | The only public entry to private application data |
-| Image service | Signature/type checks, byte and pixel limits, decode, blur/lighting signals, RGB normalization, metadata removal, generated filenames | Never executes content or trusts filename/MIME claims |
+| Next.js frontend | Direct Firebase upload, context wizard, questions, reports, previous reports, dashboard, English/Swahili UI, print and copy actions | Holds an opaque report token and Firebase anonymous identity, never service credentials |
+| FastAPI routes | Versioned transport, Firebase ID-token/object ownership checks, local multipart fallback, safe errors, request IDs, CORS | The only public entry to private application data |
+| Image service | Firebase/local storage adapter, signature/type checks, byte and pixel limits, decode, blur/lighting signals, RGB normalization, metadata removal, generated object paths | Never fetches arbitrary URLs or trusts filename/MIME/size claims |
 | Triage orchestrator | Enforces stage order, short-circuits retakes, validates every model result, records timings | Demo fixtures are selected explicitly and never used as a live fallback |
 | AI provider interface | Vision observation, initial reasoning, answer revision, and independent verification | Applies timeouts, maps provider errors, and performs at most one JSON repair attempt |
 | Evidence retrieval | Ranks local entries by crop, observations, and context and returns citations | Small, reviewable corpus; no claim of exhaustiveness |
 | Safety policy | Detects or removes dosage, mixture, restricted-product, or disproportionate instructions | Always runs after model verification |
 | SQLAlchemy repository | Assessment lifecycle, model/timing metadata, anonymous ownership filtering, dashboard queries | Uses pooled Neon connections for application traffic |
 | Alembic | Versioned schema migration | Uses the direct Neon connection where configured |
-| Private upload volume | Sanitized image files keyed by generated identifiers | Images are returned only through an ownership-checked route |
+| Private Firebase Storage | Temporary UID-scoped originals and backend-only sanitized objects | Rules deny public reads; Neon stores object paths rather than permanent download URLs |
 
 ## End-to-end assessment flow
 
@@ -71,6 +74,8 @@ Only the backend can reach the database, private upload volume, and Groq API. Th
 sequenceDiagram
     actor Farmer
     participant Web as Next.js
+    participant Auth as Firebase Auth
+    participant Store as Firebase Storage
     participant API as FastAPI
     participant Images as Image service
     participant Vision as Qwen vision
@@ -80,10 +85,17 @@ sequenceDiagram
     participant DB as Neon
 
     Farmer->>Web: Add 1-3 photos and farm context
-    Web->>API: Create assessment (multipart + ownership token)
-    API->>Images: Validate and normalize each file
-    Images-->>API: Quality signals and private paths
+    Web->>Auth: Sign in anonymously
+    Auth-->>Web: Firebase ID token + UID
+    Web->>Store: Upload to users/{uid}/uploads/...
+    Web->>API: Create assessment (object paths + Firebase/ownership tokens)
+    API->>Auth: Verify Firebase ID token
+    API->>Store: Read UID-owned temporary objects
+    API->>Images: Validate, decode, normalize, strip metadata
+    Images->>Store: Write backend-only sanitized objects
+    Images-->>API: Quality signals and private object paths
     API->>DB: Persist created assessment
+    API->>Store: Delete temporary originals
     API->>Vision: Normalized images + selected crop
     Vision-->>API: Observable evidence JSON
     API->>API: Validate or make one repair request
@@ -230,9 +242,9 @@ The application does not need a Neon management API key. Automated tests use an 
 
 ### Image lifecycle
 
-The database stores generated path metadata, not image bytes. The upload volume is private to the backend, and clients retrieve an image through a route that re-checks the assessment token. Community aggregation never joins or returns image paths.
+The database stores generated Firebase object-path metadata, not image bytes or permanent download URLs. Security Rules permit an authenticated browser to create and clean up only temporary objects under its own UID. FastAPI verifies the same Firebase identity before accepting a path, re-validates the actual stored bytes, writes a metadata-free JPEG to an Admin-only assessment path, and deletes the original. Clients retrieve sanitized images through a route that re-checks the assessment ownership token and streams the object. Community aggregation never joins or returns image paths.
 
-For a multi-replica deployment, replace the volume adapter with private object storage, retain ownership authorization in FastAPI, and use short-lived signed reads or streamed responses. The rest of the assessment schema does not need to change.
+Local development and deterministic tests retain a filesystem adapter behind the same internal metadata contract. Neither adapter changes the public report representation.
 
 ## Anonymous ownership
 
@@ -269,10 +281,10 @@ Structured logs use the request ID, route, status, assessment ID where safe, sta
 
 | Boundary | Threat | Control |
 | --- | --- | --- |
-| Browser to API | Oversized/mislabelled file, path traversal, unauthorized report access | Byte and pixel limits, decode/signature check, server filename, token-hash query scope |
+| Browser to Firebase/API | Oversized/mislabelled file, foreign object path, unauthorized report access | Firebase anonymous auth, UID-scoped rules, App Check, server-side byte/pixel/decode checks, token-hash query scope |
 | API to Groq | Secret leakage, prompt injection through notes, malformed output | Backend-only key, delimited input, constrained task prompts, strict schema, validation, bounded repair |
 | API to Neon | Credential exposure, cross-owner query | Secret manager, TLS URL, repository ownership filters, least-privileged application role |
-| API to volume | Executable upload, public enumeration | Decode/re-encode, metadata removal, private mount, generated identifiers, protected route |
+| API to Firebase Storage | Executable upload, public enumeration, permanent URL leakage | Admin-only sanitized paths, decode/re-encode, metadata removal, stored object keys instead of download URLs, protected route |
 | Reports to dashboard | Farmer re-identification | Completed-only coarse aggregation, no record rows/images/tokens, explicit signal disclaimer |
 | Model result to farmer | Unsafe action or false certainty | Differential contract, verifier call, confidence calibration, deterministic action guardrails |
 
@@ -282,7 +294,7 @@ Additional production controls belong at the deployment edge: HTTPS, rate limiti
 
 - Add a crop by adding reviewed knowledge entries, crop/schema values, translations, demo/test cases, and retrieval evaluation—not by changing provider transport.
 - Add a model provider by implementing the four capability methods and provider error mapping.
-- Move images to object storage by replacing the storage adapter while preserving generated identifiers and protected retrieval.
+- Add another object-storage provider by implementing the storage adapter while preserving generated identifiers, server-side normalization, and protected retrieval.
 - Add authenticated organizations above the existing ownership-aware repository rather than exposing raw assessment queries.
 - Improve outbreak intelligence only with opt-in governance, minimum bucket sizes, and human confirmation.
 - Evaluate calibration using agronomist-reviewed cases before mapping confidence labels to operational decisions.

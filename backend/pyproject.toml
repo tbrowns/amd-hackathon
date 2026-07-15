@@ -12,6 +12,7 @@ dependencies = [
   "aiosqlite>=0.20,<1",
   "asyncpg>=0.29,<1",
   "fastapi>=0.115,<1",
+  "firebase-admin>=6.6,<8",
   "httpx>=0.27,<1",
   "pillow>=10.4,<12",
   "pydantic>=2.9,<3",
@@ -58,6 +59,9 @@ warn_unused_ignores = true
 exclude = ["alembic"]
 
 [[tool.mypy.overrides]]
-module = ["PIL.*", "numpy", "numpy.*"]
+module = ["PIL.*", "firebase_admin", "firebase_admin.*", "numpy", "numpy.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
+
+[tool.vercel]
+entrypoint = "app.main:app"

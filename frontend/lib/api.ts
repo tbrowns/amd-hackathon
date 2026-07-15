@@ -1,4 +1,5 @@
 import { getOwnerToken } from "@/lib/token";
+import { deleteUploadedImages, uploadAssessmentImages } from "@/lib/firebase-storage";
 import type {
   Assessment,
   AssessmentList,
@@ -29,11 +30,16 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}, options?: { timeoutMs?: number; anonymous?: boolean }): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  options?: { timeoutMs?: number; anonymous?: boolean; firebaseToken?: string },
+): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), options?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const headers = new Headers(init.headers);
   if (!options?.anonymous) headers.set("X-Shamba-Token", getOwnerToken());
+  if (options?.firebaseToken) headers.set("Authorization", `Bearer ${options.firebaseToken}`);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -72,7 +78,36 @@ async function request<T>(path: string, init: RequestInit = {}, options?: { time
   }
 }
 
-export async function createAssessment(input: CreateAssessmentInput): Promise<Assessment> {
+export async function createAssessment(
+  input: CreateAssessmentInput,
+  imageStorage: RuntimeInfo["image_storage"] = "local",
+): Promise<Assessment> {
+  if (imageStorage === "firebase") {
+    const upload = await uploadAssessmentImages(input.images);
+    try {
+      return await request<Assessment>(
+        "/assessments/from-storage",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            crop: input.crop,
+            growth_stage: input.growth_stage,
+            symptom_duration: input.symptom_duration,
+            watering_conditions: input.watering_conditions,
+            language: input.language,
+            region: input.region?.trim() || undefined,
+            description: input.description?.trim() || undefined,
+            demo_scenario: input.demo_scenario,
+            images: upload.images,
+          }),
+        },
+        { firebaseToken: upload.idToken, timeoutMs: 120_000 },
+      );
+    } catch (error) {
+      await deleteUploadedImages(upload.images);
+      throw error;
+    }
+  }
   const form = new FormData();
   form.set("crop", input.crop);
   form.set("growth_stage", input.growth_stage);

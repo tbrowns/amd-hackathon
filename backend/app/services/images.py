@@ -5,14 +5,19 @@ import base64
 import io
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import UploadFile
 from PIL import Image, ImageFilter, ImageStat, UnidentifiedImageError
 
 from app.core.config import Settings
 from app.core.errors import AppError
-from app.schemas.assessments import ImageQuality
+from app.schemas.assessments import ImageQuality, StorageImageReference
+from app.services.firebase import (
+    delete_firebase_object,
+    download_firebase_object,
+    upload_firebase_object,
+)
 
 FORMAT_MIME = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 DATA_URL_PREFIX_BYTES = len("data:image/jpeg;base64,")
@@ -67,7 +72,7 @@ async def _read_limited(upload: UploadFile, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def _normalize_image(raw: bytes, destination: Path, settings: Settings) -> dict[str, Any]:
+def _normalize_image_bytes(raw: bytes, settings: Settings) -> tuple[dict[str, Any], bytes]:
     try:
         with Image.open(io.BytesIO(raw)) as probe:
             image_format = probe.format
@@ -88,7 +93,6 @@ def _normalize_image(raw: bytes, destination: Path, settings: Settings) -> dict[
             opened.load()
             normalized = opened.convert("RGB")
             normalized.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-            destination.parent.mkdir(parents=True, exist_ok=True)
             normalized, encoded = _bounded_jpeg(normalized)
             width, height = normalized.size
             thumbnail = normalized.copy()
@@ -96,22 +100,30 @@ def _normalize_image(raw: bytes, destination: Path, settings: Settings) -> dict[
             gray = thumbnail.convert("L")
             brightness = float(ImageStat.Stat(gray).mean[0])
             edge_variance = float(ImageStat.Stat(gray.filter(ImageFilter.FIND_EDGES)).var[0])
-            # Re-encoding removes EXIF, ICC, comments, and other unneeded metadata.
-            destination.write_bytes(encoded)
     except (UnidentifiedImageError, OSError, SyntaxError) as exc:
         raise AppError("invalid_image", "The uploaded file is not a valid image.", 415) from exc
     except Image.DecompressionBombError as exc:
         raise AppError("unsafe_image_dimensions", "The image dimensions are unsafe.", 413) from exc
 
-    size = destination.stat().st_size
-    return {
-        "content_type": "image/jpeg",
-        "width": width,
-        "height": height,
-        "size_bytes": size,
-        "brightness": round(brightness, 2),
-        "edge_variance": round(edge_variance, 2),
-    }
+    return (
+        {
+            "content_type": "image/jpeg",
+            "width": width,
+            "height": height,
+            "size_bytes": len(encoded),
+            "brightness": round(brightness, 2),
+            "edge_variance": round(edge_variance, 2),
+        },
+        encoded,
+    )
+
+
+def _normalize_image(raw: bytes, destination: Path, settings: Settings) -> dict[str, Any]:
+    details, encoded = _normalize_image_bytes(raw, settings)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Re-encoding removes EXIF, ICC, comments, and other unneeded metadata.
+    destination.write_bytes(encoded)
+    return details
 
 
 async def store_images(uploads: list[UploadFile], settings: Settings) -> list[dict[str, Any]]:
@@ -128,12 +140,162 @@ async def store_images(uploads: list[UploadFile], settings: Settings) -> list[di
             filename = f"{image_id}.jpg"
             destination = settings.upload_dir.resolve() / filename
             details = await asyncio.to_thread(_normalize_image, raw, destination, settings)
-            stored.append({"id": image_id, "filename": filename, **details})
+            stored.append(
+                {
+                    "id": image_id,
+                    "storage_provider": "local",
+                    "filename": filename,
+                    **details,
+                }
+            )
     except (AppError, OSError):
         for image in stored:
             (settings.upload_dir.resolve() / image["filename"]).unlink(missing_ok=True)
         raise
     return stored
+
+
+def _validated_firebase_upload_path(
+    reference: StorageImageReference, firebase_uid: str
+) -> str:
+    parts = reference.object_path.split("/")
+    if (
+        len(parts) != 5
+        or parts[0] != "users"
+        or parts[1] != firebase_uid
+        or parts[2] != "uploads"
+    ):
+        raise AppError(
+            "invalid_storage_path",
+            "The uploaded image path is not owned by the signed-in user.",
+            422,
+        )
+    try:
+        UUID(parts[3])
+        file_id, extension = parts[4].rsplit(".", 1)
+        UUID(file_id)
+    except (ValueError, AttributeError) as exc:
+        raise AppError(
+            "invalid_storage_path", "The uploaded image path is invalid.", 422
+        ) from exc
+    expected_content_type = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+    }.get(extension.lower())
+    if expected_content_type != reference.content_type:
+        raise AppError(
+            "invalid_storage_metadata",
+            "The uploaded image type does not match its storage path.",
+            422,
+        )
+    return reference.object_path
+
+
+async def store_firebase_images(
+    references: list[StorageImageReference],
+    firebase_uid: str,
+    assessment_id: str,
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    if settings.image_storage != "firebase":
+        raise AppError(
+            "firebase_storage_disabled",
+            "Firebase image storage is not enabled for this deployment.",
+            503,
+        )
+    if not references:
+        raise AppError("images_required", "Upload at least one crop image.", 422)
+    if len(references) > 3:
+        raise AppError("too_many_images", "Upload no more than three images.", 422)
+
+    stored: list[dict[str, Any]] = []
+    try:
+        for reference in references:
+            if reference.size_bytes > settings.upload_limit_bytes:
+                raise AppError(
+                    "upload_too_large",
+                    "An image exceeds the configured upload limit.",
+                    413,
+                    {"max_bytes": settings.upload_limit_bytes},
+                )
+            source_path = _validated_firebase_upload_path(reference, firebase_uid)
+            raw = await download_firebase_object(
+                source_path, settings, max_bytes=settings.upload_limit_bytes
+            )
+            details, encoded = await asyncio.to_thread(_normalize_image_bytes, raw, settings)
+            image_id = str(uuid4())
+            object_path = (
+                f"users/{firebase_uid}/assessments/{assessment_id}/{image_id}.jpg"
+            )
+            await upload_firebase_object(
+                object_path, encoded, settings, content_type="image/jpeg"
+            )
+            stored.append(
+                {
+                    "id": image_id,
+                    "storage_provider": "firebase",
+                    "object_path": object_path,
+                    **details,
+                }
+            )
+    except (AppError, OSError):
+        await delete_stored_images(stored, settings)
+        raise
+    return stored
+
+
+async def delete_firebase_uploads(
+    references: list[StorageImageReference], firebase_uid: str, settings: Settings
+) -> None:
+    for reference in references:
+        source_path = _validated_firebase_upload_path(reference, firebase_uid)
+        try:
+            await delete_firebase_object(source_path, settings)
+        except AppError:
+            # The assessment is already committed. An orphaned temporary object
+            # is preferable to a false failure that encourages a duplicate report.
+            continue
+
+
+async def delete_stored_images(images: list[dict[str, Any]], settings: Settings) -> None:
+    for image in images:
+        if image.get("storage_provider") == "firebase":
+            object_path = image.get("object_path")
+            if isinstance(object_path, str):
+                try:
+                    await delete_firebase_object(object_path, settings)
+                except AppError:
+                    pass
+            continue
+        filename = image.get("filename")
+        if isinstance(filename, str):
+            try:
+                (settings.upload_dir.resolve() / filename).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+async def image_bytes(image: dict[str, Any], settings: Settings) -> bytes:
+    if image.get("storage_provider") == "firebase":
+        object_path = image.get("object_path")
+        if not isinstance(object_path, str):
+            raise AppError("not_found", "Image not found.", 404)
+        return await download_firebase_object(
+            object_path,
+            settings,
+            max_bytes=settings.upload_limit_bytes,
+            missing_status=404,
+        )
+    filename = image.get("filename")
+    if not isinstance(filename, str):
+        raise AppError("not_found", "Image not found.", 404)
+    upload_root = settings.upload_dir.resolve()
+    path = (upload_root / filename).resolve()
+    if path.parent != upload_root or not path.is_file():
+        raise AppError("not_found", "Image not found.", 404)
+    return await asyncio.to_thread(path.read_bytes)
 
 
 def local_quality(
@@ -241,11 +403,10 @@ def merge_quality(local: ImageQuality, model: ImageQuality) -> ImageQuality:
     )
 
 
-def image_data_urls(images: list[dict[str, Any]], settings: Settings) -> list[str]:
+async def image_data_urls(images: list[dict[str, Any]], settings: Settings) -> list[str]:
     values: list[str] = []
     for image in images:
-        path = settings.upload_dir.resolve() / image["filename"]
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        encoded = base64.b64encode(await image_bytes(image, settings)).decode("ascii")
         values.append(f"data:image/jpeg;base64,{encoded}")
     return values
 

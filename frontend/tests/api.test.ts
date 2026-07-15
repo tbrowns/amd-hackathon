@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getDashboardSummary, listAssessments, submitAnswers } from "@/lib/api";
+import { ApiError, createAssessment, getDashboardSummary, listAssessments, submitAnswers } from "@/lib/api";
 import { assessment, assessmentSummary, dashboardSummary } from "@/tests/fixtures";
 
 const fetchMock = vi.fn();
+const firebaseMocks = vi.hoisted(() => ({
+  upload: vi.fn(),
+  remove: vi.fn(),
+}));
+
+vi.mock("@/lib/firebase-storage", () => ({
+  uploadAssessmentImages: firebaseMocks.upload,
+  deleteUploadedImages: firebaseMocks.remove,
+}));
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return {
@@ -16,6 +25,8 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 describe("API client", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    firebaseMocks.upload.mockReset();
+    firebaseMocks.remove.mockReset();
     vi.stubGlobal("fetch", fetchMock);
     window.localStorage.clear();
     window.localStorage.setItem("shambalens.owner-token.v1", "browser-owner-token");
@@ -39,6 +50,32 @@ describe("API client", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       answers: [{ question_id: "target_rings", answer: false }],
     });
+  });
+
+  it("uploads images directly to Firebase before creating an assessment", async () => {
+    const storedImage = {
+      object_path: "users/user-1/uploads/batch-1/image-1.jpg",
+      content_type: "image/jpeg",
+      size_bytes: 3,
+    };
+    firebaseMocks.upload.mockResolvedValue({ idToken: "firebase-id-token", images: [storedImage] });
+    fetchMock.mockResolvedValueOnce(jsonResponse(assessment, 201));
+    const image = new File([new Uint8Array([0xff, 0xd8, 0xff])], "leaf.jpg", { type: "image/jpeg" });
+
+    await createAssessment({
+      crop: "tomato",
+      growth_stage: "vegetative",
+      symptom_duration: "4-7 days",
+      watering_conditions: "Soil has remained moist",
+      language: "en",
+      images: [image],
+    }, "firebase");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://localhost:8000/api/v1/assessments/from-storage");
+    expect((init.headers as Headers).get("Authorization")).toBe("Bearer firebase-id-token");
+    expect((init.headers as Headers).get("X-Shamba-Token")).toBe("browser-owner-token");
+    expect(JSON.parse(String(init.body)).images).toEqual([storedImage]);
   });
 
   it("uses the canonical dashboard fields without an ownership header", async () => {

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Header
+from fastapi import Depends, Header
 
+from app.core.config import Settings, get_settings
 from app.core.errors import AppError
+from app.services.firebase import verify_firebase_id_token
 
 
 async def require_token(
@@ -24,3 +26,23 @@ async def require_token(
             401,
         )
     return token
+
+
+async def require_firebase_user(
+    settings: Annotated[Settings, Depends(get_settings)],
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> str:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise AppError(
+            "firebase_token_required",
+            "A Firebase bearer token is required for direct image uploads.",
+            401,
+        )
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise AppError(
+            "firebase_token_required",
+            "A Firebase bearer token is required for direct image uploads.",
+            401,
+        )
+    return await verify_firebase_id_token(token, settings)

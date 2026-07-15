@@ -28,6 +28,11 @@ def test_neon_style_url_is_normalized_for_asyncpg() -> None:
     assert "p%40ss" in settings.async_database_url
 
 
+def test_comma_separated_allowed_origins_are_accepted() -> None:
+    settings = Settings(allowed_origins="https://app.example,https://preview.example")  # type: ignore[arg-type]
+    assert settings.allowed_origins == ["https://app.example", "https://preview.example"]
+
+
 @pytest.mark.asyncio
 async def test_groq_timeout_is_mapped_without_leaking_credentials(
     monkeypatch: pytest.MonkeyPatch,

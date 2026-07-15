@@ -183,6 +183,42 @@ class AnswerSubmission(StrictModel):
         return value
 
 
+class StorageImageReference(StrictModel):
+    object_path: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=512,
+            pattern=r"^[A-Za-z0-9._/-]+$",
+        ),
+    ]
+    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+    size_bytes: int = Field(gt=0, le=25 * 1024 * 1024)
+
+
+class StoredAssessmentCreate(StrictModel):
+    crop: Crop
+    growth_stage: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)
+    ]
+    symptom_duration: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)
+    ]
+    watering_conditions: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
+    images: list[StorageImageReference] = Field(min_length=1, max_length=3)
+    language: Language = Language.english
+    region: Annotated[str, StringConstraints(strip_whitespace=True, max_length=120)] | None = None
+    description: (
+        Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] | None
+    ) = None
+    demo_scenario: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)
+    ] | None = None
+
+
 class ImageMetadata(StrictModel):
     id: str
     content_type: Literal["image/jpeg", "image/png", "image/webp"]
@@ -259,6 +295,7 @@ class RuntimeInfo(StrictModel):
     verifier_model: str
     last_stage_latencies_ms: dict[str, float]
     database: Literal["postgresql", "sqlite", "other"]
+    image_storage: Literal["local", "firebase"]
 
 
 class ErrorBody(StrictModel):

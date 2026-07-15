@@ -36,7 +36,9 @@ Capture these six views after starting demo mode for submission screenshots; the
 ```mermaid
 flowchart LR
     Farmer["Farmer browser"] --> Web["Next.js web app"]
-    Web -->|"Versioned JSON + multipart API"| API["FastAPI service"]
+    Web -->|"Anonymous auth + direct upload"| Files[("Private Firebase Storage")]
+    Web -->|"Versioned JSON + object paths"| API["FastAPI service"]
+    API -->|"Verify identity, read and sanitize"| Files
     API --> Gate["Signature, size, pixel, blur and lighting gate"]
     Gate -->|"usable images"| Vision["Qwen vision observation"]
     Gate -->|"retake required"| Web
@@ -48,7 +50,6 @@ flowchart LR
     Verify --> Guard["Deterministic safety guardrails"]
     Guard --> API
     API --> DB[("Neon PostgreSQL")]
-    API --> Files[("Private upload volume")]
 ```
 
 The vision model receives normalized crop images. GPT-OSS is text-only: it receives validated observations, farmer context, answers, and retrieved knowledge—not the images—and the UI never claims otherwise. The AI provider is behind an application interface so the configured implementation can be replaced without changing the API or persistence layer.
@@ -161,6 +162,32 @@ docker compose up --build
 
 Do not enable the `local` profile when the Neon URLs are set. Inspect the non-sensitive effective runtime at <http://localhost:8000/api/v1/system/runtime>; it reports configured model identifiers, demo/live mode, and measured stage latencies without returning credentials.
 
+### 5. Configure private Firebase image storage for Vercel
+
+The browser can upload images directly to the `shamba-ai-fe407` Firebase Storage bucket so
+large multipart requests never pass through a Vercel Function. The API accepts only Firebase
+object paths owned by the signed-in anonymous Firebase user, downloads the object with Firebase
+Admin, validates and re-encodes it, stores the sanitized copy under an assessment-specific path,
+and deletes the temporary original.
+
+1. Upgrade the Firebase project to Blaze and enable **Authentication > Anonymous**.
+2. Create a service account with access to the Storage bucket. Put the complete JSON value in
+   the backend-only `FIREBASE_SERVICE_ACCOUNT_JSON` deployment secret; never expose it through a
+   `NEXT_PUBLIC_` variable.
+3. Deploy the deny-by-default rules with `firebase deploy --only storage` from the repository root.
+4. Set `IMAGE_STORAGE=firebase`, `FIREBASE_PROJECT_ID=shamba-ai-fe407`, and
+   `FIREBASE_STORAGE_BUCKET=shamba-ai-fe407.firebasestorage.app` on the backend.
+5. Set `NEXT_PUBLIC_API_BASE_URL` to the deployed API. The Firebase web identifiers are already
+   represented in the frontend and may be overridden with the corresponding `NEXT_PUBLIC_`
+   variables from `.env.example`.
+6. For App Check, create a reCAPTCHA Enterprise web key, set
+   `NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY`, verify production traffic, and only then enable
+   Storage enforcement in the Firebase console.
+
+Use `backend` as the Vercel project root. The FastAPI entrypoint and a 300-second Function duration
+are declared in `backend/pyproject.toml` and `backend/vercel.json`. Run `alembic upgrade head`
+against the Neon direct URL as a separate release step before deploying application code.
+
 ## Environment reference
 
 | Variable | Required | Purpose |
@@ -179,13 +206,19 @@ Do not enable the `local` profile when the Neon URLs are set. Inspect the non-se
 | `MODEL_TIMEOUT_SECONDS` | No | Per-provider-request timeout |
 | `ALLOWED_ORIGINS` | No | Comma-separated browser origins allowed by the API |
 | `UPLOAD_DIR` | No | Private backend image directory |
+| `IMAGE_STORAGE` | No | `local` for development or `firebase` for direct cloud uploads |
+| `FIREBASE_PROJECT_ID` | Firebase | Firebase project used for ID-token verification |
+| `FIREBASE_STORAGE_BUCKET` | Firebase | Private Cloud Storage bucket name |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase | Backend-only Firebase Admin service-account JSON |
 | `ANONYMOUS_TOKEN_SALT` | Deployment | Server-side salt for hashing browser ownership tokens |
 | `NEXT_PUBLIC_API_BASE_URL` | Yes | Public browser-facing API URL, set at frontend build time |
+| `NEXT_PUBLIC_FIREBASE_*` | No | Public Firebase web identifiers; defaults target `shamba-ai-fe407` |
+| `NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY` | Recommended | Public reCAPTCHA Enterprise site key for App Check |
 
 ## Assessment pipeline
 
-1. The API accepts one to three JPEG, PNG, or WebP files and context such as crop, stage, region, symptom duration, watering, notes, and language.
-2. It validates file signatures, size, dimensions, decompression limits, lighting, and blur; normalized copies are written under generated names with metadata removed.
+1. The browser uploads one to three JPEG, PNG, or WebP files directly to a UID-scoped Firebase path; local development can continue using multipart uploads.
+2. The API verifies the Firebase ID token and object ownership, then validates file signatures, size, dimensions, decompression limits, lighting, and blur. It re-encodes sanitized JPEGs under generated assessment paths with metadata removed.
 3. Qwen returns plant visibility, crop relevance, affected-area visibility, image quality, and strictly observable symptoms as validated JSON. A malformed response receives one bounded repair attempt.
 4. A **retake required** result stops before the more expensive reasoning stage and gives precise capture guidance.
 5. The retrieval service selects relevant, cited evidence for tomato, onion, or kale from the local knowledge base.
@@ -203,6 +236,7 @@ The backend exposes versioned endpoints for the application flow:
 GET    /health
 GET    /api/v1/system/runtime
 POST   /api/v1/assessments
+POST   /api/v1/assessments/from-storage
 POST   /api/v1/assessments/{id}/analyze
 POST   /api/v1/assessments/{id}/answers
 GET    /api/v1/assessments/{id}
@@ -212,7 +246,7 @@ GET    /api/v1/dashboard/summary
 POST   /api/v1/demo/reset
 ```
 
-Assessment creation uses multipart form data. Protected assessment and image routes require the opaque browser ownership token established by the client. Errors use one envelope:
+Local assessment creation uses multipart form data. Firebase assessment creation uses a JSON object-path contract and additionally requires a Firebase bearer token. Protected assessment and image routes require the opaque browser ownership token established by the client. Errors use one envelope:
 
 ```json
 {
@@ -231,7 +265,7 @@ Assessment creation uses multipart form data. Protected assessment and image rou
 - Chemical dosages, mixtures, and restricted-product instructions are prohibited. When chemical control may be appropriate, the report directs the farmer to a qualified local professional, the product label, and local regulations.
 - Low-risk integrated pest-management steps are prioritized, with explicit **Do today**, **Monitor**, **Avoid**, and **Escalate when** sections.
 - Exact location, names, ownership tokens, and images are excluded from community analytics. Dashboard results are labelled **Community-reported AI signals, not confirmed outbreak data**.
-- Original filenames are not trusted. Images are decoded, normalized, stored under generated names, and retrieved only through an ownership-checked API route.
+- Original filenames and client URLs are not trusted. Firebase object paths are UID-scoped and validated, images are decoded and normalized by the backend, and sanitized objects are retrieved only through an ownership-checked API route.
 - Browser ownership is anonymous and convenient, not full account authentication. Production deployments that require multi-device identity should add an authentication service.
 
 More detail is in [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -287,18 +321,17 @@ Run it once with `DEMO_MODE=true` to verify orchestration and once with `DEMO_MO
 
 ## Deployment guidance
 
-Build and deploy `frontend/Dockerfile` and `backend/Dockerfile` as separate services, then configure:
+Deploy the frontend and backend as separate Vercel projects (or use the Dockerfiles on a container platform), then configure:
 
 1. `NEXT_PUBLIC_API_BASE_URL` as the public HTTPS backend URL **during the frontend image build**.
-2. Neon pooled/direct URLs and Groq credentials in the backend platform's secret manager.
+2. Use `backend` as the FastAPI project root. Neon pooled/direct URLs, Groq credentials, and Firebase Admin JSON belong in the backend secret manager.
 3. `ALLOWED_ORIGINS` as the exact public frontend origin and `ENVIRONMENT=production`.
 4. A fresh, stable `ANONYMOUS_TOKEN_SALT`; rotating it invalidates existing anonymous ownership tokens.
-5. A persistent private volume mounted at `/app/data/uploads`.
-6. HTTPS, request-size limits, log retention, backups, and rate limiting at the platform edge.
+5. `IMAGE_STORAGE=firebase`, the Firebase project/bucket identifiers, Anonymous Authentication, the repository Storage Rules, and optionally App Check.
+6. Run `alembic upgrade head` against the Neon direct URL as a separate release step.
+7. Configure HTTPS, log retention, backups, spend alerts, and rate limiting at the platform edge.
 
-The backend container applies Alembic migrations before serving and exposes `/health` for readiness. Neon should remain external in live deployments; the Compose `local` database profile is only for development, tests, and demonstrations.
-
-The current upload volume assumes one backend replica. Before horizontal scaling, move sanitized images to private object storage with signed, ownership-checked access while keeping only object identifiers in PostgreSQL.
+The backend container applies Alembic migrations before serving; Vercel does not, which is why migrations are a separate release action there. Neon and Firebase remain external in live deployments. The Compose `local` database profile and filesystem image adapter remain available for development, tests, and demonstrations.
 
 ## Supported crops and limitations
 
@@ -313,13 +346,13 @@ Other limitations:
 - translations prioritize accessible English and Swahili but still require field evaluation with farmers;
 - community charts show coarse model signals, not confirmed incidence or outbreak declarations;
 - browser-token ownership does not provide accounts, synchronization, or recovery across devices;
-- local-volume image storage is not yet a horizontally scalable production design.
+- Firebase anonymous identities and opaque report tokens do not provide multi-device account recovery.
 
 ## Roadmap
 
 - field-test Swahili phrasing and capture guidance with farmers and extension officers;
 - expand reviewed crop evidence and add provenance/versioning for every entry;
-- add private object storage and authenticated cooperative workspaces;
+- add authenticated cooperative workspaces and recoverable farmer accounts;
 - support offline draft capture and delayed upload on unreliable connections;
 - calibrate confidence against agronomist-reviewed cases and publish evaluation results;
 - add opt-in alerts only after regional signals have a human confirmation workflow.

@@ -16,7 +16,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/components/providers/runtime-provider", () => ({
-  useRuntime: () => ({ runtime: { execution_mode: "live" }, loading: false }),
+  useRuntime: () => ({ runtime: { execution_mode: "live", image_storage: "local" }, loading: false }),
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {

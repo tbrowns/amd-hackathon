@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 
@@ -25,7 +26,11 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=8, ge=1, le=25)
     max_image_pixels: int = Field(default=33_000_000, ge=1_000_000)
     upload_dir: Path = Path("data/uploads")
-    allowed_origins: list[str] = ["http://localhost:3000"]
+    image_storage: Literal["local", "firebase"] = "local"
+    firebase_project_id: str | None = None
+    firebase_storage_bucket: str | None = None
+    firebase_service_account_json: SecretStr | None = None
+    allowed_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
     anonymous_token_salt: str = "change-this-development-salt"
     model_timeout_seconds: float = Field(default=45, ge=3, le=180)
     model_max_retries: int = Field(default=1, ge=0, le=2)
@@ -40,6 +45,17 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.lstrip().startswith("["):
             return [part.strip() for part in value.split(",") if part.strip()]
         return value
+
+    @model_validator(mode="after")
+    def firebase_storage_has_required_identifiers(self) -> Settings:
+        if self.image_storage == "firebase" and not (
+            self.firebase_project_id and self.firebase_storage_bucket
+        ):
+            raise ValueError(
+                "FIREBASE_PROJECT_ID and FIREBASE_STORAGE_BUCKET are required "
+                "when IMAGE_STORAGE=firebase"
+            )
+        return self
 
     @property
     def async_database_url(self) -> str:

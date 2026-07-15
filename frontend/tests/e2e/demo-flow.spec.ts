@@ -34,7 +34,7 @@ test("demo assessment reaches a visibly simulated verified report", async ({ pag
       return;
     }
     if (path.endsWith("/system/runtime")) {
-      await route.fulfill({ json: { ai_provider: "demo", execution_mode: "demo", vision_model: "deterministic-fixture", reasoning_model: "deterministic-fixture", verifier_model: "deterministic-fixture", last_stage_latencies_ms: {}, database: "postgresql" }, headers: cors });
+      await route.fulfill({ json: { ai_provider: "demo", execution_mode: "demo", vision_model: "deterministic-fixture", reasoning_model: "deterministic-fixture", verifier_model: "deterministic-fixture", last_stage_latencies_ms: {}, database: "postgresql", image_storage: "local" }, headers: cors });
       return;
     }
     if (path.endsWith("/assessments") && request.method() === "POST") {
@@ -82,7 +82,7 @@ test("demo assessment reaches a visibly simulated verified report", async ({ pag
 });
 
 test("landing and safety routes render", async ({ page }) => {
-  await page.route("**/api/v1/system/runtime", (route) => route.fulfill({ json: { ai_provider: "groq", execution_mode: "live", vision_model: "qwen/qwen3.6-27b", reasoning_model: "openai/gpt-oss-120b", verifier_model: "openai/gpt-oss-120b", last_stage_latencies_ms: {}, database: "postgresql" }, headers: { "access-control-allow-origin": "*" } }));
+  await page.route("**/api/v1/system/runtime", (route) => route.fulfill({ json: { ai_provider: "groq", execution_mode: "live", vision_model: "qwen/qwen3.6-27b", reasoning_model: "openai/gpt-oss-120b", verifier_model: "openai/gpt-oss-120b", last_stage_latencies_ms: {}, database: "postgresql", image_storage: "local" }, headers: { "access-control-allow-origin": "*" } }));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /See what your crop is telling you/ })).toBeVisible();
   await page.goto("/about");

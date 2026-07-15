@@ -139,7 +139,7 @@ The durable asset is not a single model call. It is the reviewed crop evidence, 
 - The configured Qwen vision model may have preview or account-specific access.
 - English and Swahili phrasing need structured farmer usability studies.
 - Anonymous browser ownership does not synchronize or recover reports across devices.
-- Prototype images use one private volume, so the backend is not ready for multiple replicas.
+- Firebase image storage is horizontally accessible, but anonymous identities still lack multi-device recovery and organizational access controls.
 - Community summaries are model-generated signals, not verified outbreak surveillance.
 - No measured field-accuracy, calibration, or economic-impact claim should be made until an agronomist-reviewed evaluation is complete.
 
@@ -150,7 +150,7 @@ The durable asset is not a single model call. It is the reviewed crop evidence, 
 - conduct farmer and extension-officer usability sessions in English and Swahili;
 - build an agronomist-reviewed evaluation set and publish calibration by crop/problem category;
 - version and expand the evidence corpus with regional sources;
-- add private object storage, authenticated cooperative workspaces, and expert handoff;
+- add authenticated cooperative workspaces, recoverable farmer accounts, and expert handoff;
 - add offline draft capture for weak-connectivity environments.
 
 ### Later
